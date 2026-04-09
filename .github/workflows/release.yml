@@ -1,28 +1,77 @@
-name: Release
+name: release
+run-name: "${{ github.event.inputs.version }} release"
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "portainerctl version. e.g. v0.x.x, v0.x.x-beta"
+        required: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  validate:
+    name: validate
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: "[preparation] checkout the current branch"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: "[preparation] set up golang"
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: "[validation] verify go mod tidy"
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
+            echo "::error::go.mod or go.sum is out of date — please run 'go mod tidy' locally and commit the changes"
+            exit 1
+          fi
+
+      - name: "[validation] build"
+        run: go build ./...
+
+      - name: "[validation] test"
+        run: go test ./...
+
+  release:
+    name: create a pre-release
+    runs-on: ubuntu-latest
+    needs: [validate]
+    steps:
+      - name: "[execution] create a pre-release"
+        run: |
+          gh release create \
+            "${{ github.event.inputs.version }}" \
+            --repo ${{ github.repository }} \
+            --title "${{ github.event.inputs.version }}" \
+            --target develop \
+            --prerelease \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: build and upload release artifacts
+    runs-on: ubuntu-latest
+    needs: [release]
+    steps:
+      - name: "[preparation] checkout the release tag"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.version }}
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: "[preparation] set up golang"
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
 
-      - name: Run GoReleaser
+      - name: "[execution] run goreleaser"
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser

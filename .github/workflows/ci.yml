@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: ["develop"]
+  pull_request:
+    branches: ["develop"]
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "[preparation] checkout the current branch"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: "[preparation] set up golang"
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: "[validation] verify go mod tidy"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
+            echo "::warning::go.mod or go.sum is out of date — please run 'go mod tidy' locally and commit the changes"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              gh pr comment ${{ github.event.pull_request.number }} \
+                --repo ${{ github.repository }} \
+                --body $'> [!WARNING]\n> `go.mod` or `go.sum` is out of date. Please run `go mod tidy` locally and commit the changes.'
+            fi
+          fi
+
+      - name: "[validation] vet"
+        run: go vet ./...
+
+      - name: "[validation] test"
+        run: go test ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [validate]
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - name: "[preparation] checkout the current branch"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: "[preparation] set up golang"
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: "[execution] build the binary for ${{ matrix.goos }}/${{ matrix.goarch }}"
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o portainerctl .
+
+      - name: "[post] upload artifact"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: portainerctl-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ./portainerctl
+          retention-days: 30
